@@ -1,0 +1,80 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      reklam:
+        description: "Reklam (AdMob) eklensin mi?"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      REKLAM: ${{ github.event.inputs.reklam != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Bagimliliklari kur
+        run: npm install
+
+      - name: Web dosyalarini hazirla
+        run: |
+          mkdir -p www
+          if [ ! -f www/index.html ]; then
+            f=$(find . -name index.html -not -path "./node_modules/*" -not -path "./android/*" | head -n 1)
+            if [ -z "$f" ]; then echo "index.html depoda bulunamadi"; exit 1; fi
+            cp "$f" www/index.html
+          fi
+          ls -la www
+
+      - name: Reklamsiz surum
+        if: env.REKLAM != 'true'
+        run: |
+          npm uninstall @capacitor-community/admob
+          sed -i 's/const ADS={enabled:true/const ADS={enabled:false/' www/index.html
+          grep -o "const ADS={enabled:[a-z]*" www/index.html
+
+      - name: Android projesini olustur
+        run: npx cap add android
+
+      - name: Simge uret
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core
+          pip install pillow
+          python3 make_icons.py
+
+      - name: AdMob ayarlari
+        if: env.REKLAM == 'true'
+        run: |
+          sed -i 's/minSdkVersion = 22/minSdkVersion = 23/' android/variables.gradle
+          sed -i 's#</application>#    <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713"/>\n    </application>#' android/app/src/main/AndroidManifest.xml
+          grep -n "APPLICATION_ID" android/app/src/main/AndroidManifest.xml
+          grep -n "minSdkVersion" android/variables.gradle
+
+      - name: Senkronize et
+        run: npx cap sync android
+
+      - name: Debug APK olustur
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: APK yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: satranc-apk-${{ env.REKLAM == 'true' && 'reklamli' || 'reklamsiz' }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
